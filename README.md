@@ -23,33 +23,30 @@
 
 ## 🎧 Listen — made on the 3060 with this fork
 
-<p align="center">
-  <a href="https://fspecii.github.io/audio.cpp-lowend-gpu/">
-    <img alt="Play the samples" src="https://img.shields.io/badge/▶%20PLAY%20THE%20SAMPLES-in%20your%20browser-22c55e?style=for-the-badge">
-  </a>
-</p>
+### “Thirty Sixty” — 2:24, generated in 361 s
 
-<!-- IN-README PLAYER: GitHub only renders media from its own user-attachments CDN.
-     To get an inline player here, open any issue/comment box on this repo, drag
-     docs/ambsd-3060-trap.mp4 into it, copy the generated
-     https://github.com/user-attachments/assets/<uuid> URL, and paste it on a line
-     of its own right below. GitHub turns that into a play button automatically.
-     Raw/repo-relative URLs render as plain links - verified, they do not work. -->
+A trap track *about* this optimisation work, written and rendered end-to-end on one RTX 3060.
 
-*(An `<audio>` tag can't live in a GitHub README — the renderer strips it. The button above
-opens a real player; the mp4 below is the same track if you'd rather download it.)*
-
-**“Thirty Sixty”** — 2:24, generated in **361 s**. A trap track *about* this optimisation work,
-written and rendered end-to-end on one RTX 3060:
+https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/samples/ambsd-3060-trap.mp4
 
 > *Ambsd on the build, running on a thirty sixty*
 > *Three times faster and the music still pretty*
 > *Forty three seconds where it used to be a city*
 > *Low end GPU but the output not gritty*
 
-**Trap demo** — 2:00, generated in **293 s**. 140 BPM half-time, F minor.
+### Trap demo — 2:00, generated in 293 s
 
-Direct files: [`ambsd-3060-trap.mp3`](docs/ambsd-3060-trap.mp3) · [`trap-demo.mp3`](docs/trap-demo.mp3) · [`ambsd-3060-trap.mp4`](docs/ambsd-3060-trap.mp4)
+140 BPM half-time, F minor.
+
+https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/samples/trap-demo.mp4
+
+<p align="center">
+  <a href="https://fspecii.github.io/audio.cpp-lowend-gpu/">
+    <img alt="Play the samples" src="https://img.shields.io/badge/▶%20ALSO%20ON%20THE%20PROJECT%20PAGE-audio%20player-22c55e?style=for-the-badge">
+  </a>
+</p>
+
+Files: [`ambsd-3060-trap.mp4`](samples/ambsd-3060-trap.mp4) · [`trap-demo.mp4`](samples/trap-demo.mp4) · [`ambsd-3060-trap.mp3`](samples/ambsd-3060-trap.mp3) · [`trap-demo.mp3`](samples/trap-demo.mp3)
 
 ---
 
