@@ -493,6 +493,10 @@ public:
         return decode_cache_.valid_steps();
     }
 
+    runtime::TransformerBatchedKVState export_batched_decode_state() const {
+        return batched_decode_cache_.export_state();
+    }
+
     void release_runtime_graphs() {
         release_prefill_graph();
         release_decode_graph();
@@ -1439,6 +1443,10 @@ int64_t QwenCausalDecodeRuntime::decode_current_end() const noexcept {
 
 int64_t QwenCausalDecodeRuntime::decode_valid_steps() const noexcept {
     return impl_->decode_valid_steps();
+}
+
+runtime::TransformerBatchedKVState QwenCausalDecodeRuntime::export_batched_decode_state() const {
+    return impl_->export_batched_decode_state();
 }
 
 void QwenCausalDecodeRuntime::release_runtime_graphs() {

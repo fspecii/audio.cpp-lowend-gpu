@@ -1233,11 +1233,13 @@ TensorData TensorSource::require_tensor(
     const std::vector<int64_t> & expected_shape) const {
     const core::TensorShape shape = shape_from_dims(expected_shape);
     const ggml_type type = ggml_type_for_tensor_storage(resolve_tensor_storage_type(*this, name, storage_type));
-    const auto raw = require_tensor_data(name);
+    auto raw = require_tensor_data(name);
     validate_expected_shape(name, raw.metadata.shape, expected_shape);
     if (raw_dtype_matches_ggml_type(raw.metadata.dtype, type)) {
         validate_raw_tensor_byte_size(name, shape, type, raw.bytes.size());
-        return TensorData{shape, type, raw.bytes};
+        // Move, don't copy: this is the no-conversion fast path and `raw` is dead after this.
+        // Copying here duplicated every weight tensor on the host (6.4 GB for MiniMax Music 3).
+        return TensorData{shape, type, std::move(raw.bytes)};
     }
     const ggml_type raw_type = ggml_type_for_tensor_storage(tensor_storage_type_for_dtype(raw.metadata.dtype));
     const auto values = decode_tensor_data_f32(name, TensorData{shape, raw_type, raw.bytes});
@@ -1256,12 +1258,12 @@ TensorData TensorSource::require_tensor_as_shape(
     }
     const core::TensorShape source_shape = shape_from_dims(expected);
     const ggml_type type = ggml_type_for_tensor_storage(resolve_tensor_storage_type(*this, name, storage_type));
-    const auto raw = require_tensor_data(name);
+    auto raw = require_tensor_data(name);
     validate_expected_shape(name, raw.metadata.shape, expected);
     if (raw.metadata.shape == std::vector<int64_t>(tensor_shape) &&
         raw_dtype_matches_ggml_type(raw.metadata.dtype, type)) {
         validate_raw_tensor_byte_size(name, shape, type, raw.bytes.size());
-        return TensorData{shape, type, raw.bytes};
+        return TensorData{shape, type, std::move(raw.bytes)};  // see require_tensor: avoid a full copy
     }
     const ggml_type raw_type = ggml_type_for_tensor_storage(tensor_storage_type_for_dtype(raw.metadata.dtype));
     const auto values = decode_tensor_data_f32(name, TensorData{source_shape, raw_type, raw.bytes});

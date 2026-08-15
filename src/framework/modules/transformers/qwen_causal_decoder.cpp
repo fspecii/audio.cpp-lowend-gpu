@@ -178,6 +178,8 @@ QwenDecoderHiddenBatchedStaticCacheOutputs QwenDecoderHiddenModule::build_static
 
     const int64_t batch_size = input.shape.dims[0];
     const int64_t row_elems = config_.stack.num_key_value_heads * config_.stack.head_dim;
+    runtime::TransformerKVCacheOptions cache_options;
+    cache_options.allow_f16_storage = true;
     std::vector<core::TensorValue> cache_keys;
     std::vector<core::TensorValue> cache_values;
     cache_keys.reserve(weights.stack.layers.size());
@@ -186,14 +188,17 @@ QwenDecoderHiddenBatchedStaticCacheOutputs QwenDecoderHiddenModule::build_static
     auto x = input;
     const QwenDecoderLayerModule layer_module(qwen_decoder_layer_config_from_stack(config_.stack));
     for (const auto & layer : weights.stack.layers) {
+        // F16 KV cache: halves the decode-graph allocation (F32 KV was 4.9 GB for a
+        // 120 s MiniMax Music 3 run and OOM'd a 12 GB card). set_rows/cpy cast on
+        // write and mul_mat accepts an F16 source, so the graph stays valid.
         cache_keys.push_back(core::make_tensor(
             ctx,
-            GGML_TYPE_F32,
+            GGML_TYPE_F16,
             core::TensorShape::from_dims(
                 {batch_size, cache_steps, config_.stack.num_key_value_heads, config_.stack.head_dim})));
         cache_values.push_back(core::make_tensor(
             ctx,
-            GGML_TYPE_F32,
+            GGML_TYPE_F16,
             core::TensorShape::from_dims(
                 {batch_size, cache_steps, config_.stack.num_key_value_heads, config_.stack.head_dim})));
         auto out = layer_module.build_with_static_cache_tail_batched(
@@ -219,7 +224,8 @@ QwenDecoderHiddenBatchedStaticCacheOutputs QwenDecoderHiddenModule::build_static
             batch_size,
             row_elems,
             std::move(cache_keys),
-            std::move(cache_values)),
+            std::move(cache_values),
+            cache_options),
     };
 }
 

@@ -19,6 +19,9 @@ struct MiniMaxMusic3DepthCodes {
 struct MiniMaxMusic3DepthWeights {
     std::shared_ptr<core::BackendWeightStore> store;
     core::TensorValue audio_embeddings;
+    // Per-codebook contiguous slices of audio_embeddings. ggml_get_rows on a *view* of a
+    // quantized table produced an async CUDA fault, so the fused graph indexes these instead.
+    std::vector<core::TensorValue> audio_embeddings_split;
     modules::LinearWeights projection;
     core::TensorValue position_embedding;
     modules::QwenDecoderStackWeights stack;
@@ -42,6 +45,14 @@ public:
         const std::vector<float> & last_hidden_uncond,
         int32_t semantic_code,
         float guidance_scale,
+        int64_t top_k,
+        uint64_t seed,
+        uint64_t & sample_call_index,
+        uint64_t & rng_offset_blocks);
+
+    MiniMaxMusic3DepthCodes generate_cond(
+        const std::vector<float> & last_hidden_cond,
+        int32_t semantic_code,
         int64_t top_k,
         uint64_t seed,
         uint64_t & sample_call_index,

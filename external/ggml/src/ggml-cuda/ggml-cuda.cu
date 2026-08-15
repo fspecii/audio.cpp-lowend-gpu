@@ -2715,9 +2715,16 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+    // audio.cpp local patch: MMVQ's multi-column path (ncols 2..8) runs well below peak
+    // bandwidth on some shapes (measured ~45% on the MiniMax Music 3 depth decoder).
+    // GGML_CUDA_MMVQ_MAX lets us lower the cutoff so those shapes route to MMQ instead.
+    static const int mmvq_max_batch = [] {
+        const char * env = getenv("GGML_CUDA_MMVQ_MAX");
+        return env != nullptr ? atoi(env) : MMVQ_MAX_BATCH_SIZE;
+    }();
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
-        && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+        && src1->ne[1] <= mmvq_max_batch;
     bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
@@ -3421,6 +3428,10 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_CUDA_GRAPH
 static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
+
+    if (cgraph->uid == UINT64_MAX) {
+        return false; // graph explicitly opted out of CUDA graph capture
+    }
 
     bool use_cuda_graph = true;
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph

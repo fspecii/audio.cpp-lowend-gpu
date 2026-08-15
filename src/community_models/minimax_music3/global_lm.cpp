@@ -2,6 +2,8 @@
 
 #include "engine/framework/modules/weight_binding.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -31,6 +33,11 @@ modules::QwenDecoderActivationCastPolicy activation_cast_policy(core::BackendTyp
         backend_type == core::BackendType::Metal) {
         return policy;
     }
+    if (std::getenv("MM3_NO_ACT_CAST") != nullptr) {
+        // Skip the bf16 round-trip casts (~214k kernel launches / ~2 ms per frame).
+        // Costs exact bf16-parity with the reference; compute runs in F32 throughout.
+        return policy;
+    }
     policy.enabled = true;
     policy.type = GGML_TYPE_BF16;
     policy.after_input_norm = true;
@@ -58,6 +65,30 @@ modules::QwenDecoderLayerWeights load_qwen_layer(
     const std::string prefix = "model.layers." + std::to_string(layer);
     modules::QwenDecoderLayerWeights out;
     out.input_norm = binding::norm_weight_from_source(store, source, prefix + ".input_layernorm", config.hidden_size);
+    // Fused QKV (default; MM3_SPLIT_QKV reverts). GQA-safe: PackedQKV slices
+    // q_out + kv_out*2 in exactly this concatenation order, and all three tensors are
+    // row-major {rows, hidden} of the same dtype, so raw byte concatenation is the packed
+    // weight. 36 layers x 2 fewer GEMM launches on every AR frame.
+    if (std::getenv("MM3_FUSE_LM_QKV") != nullptr) {
+        const auto q_raw = source.require_tensor_data(prefix + ".self_attn.q_proj.weight");
+        const auto k_raw = source.require_tensor_data(prefix + ".self_attn.k_proj.weight");
+        const auto v_raw = source.require_tensor_data(prefix + ".self_attn.v_proj.weight");
+        if (q_raw.metadata.dtype != k_raw.metadata.dtype || q_raw.metadata.dtype != v_raw.metadata.dtype ||
+            k_raw.bytes.size() != v_raw.bytes.size()) {
+            throw std::runtime_error("MiniMax Music 3 global qkv fuse requires matching dtypes");
+        }
+        const ggml_type qkv_type = assets::ggml_type_for_tensor_dtype(q_raw.metadata.dtype);
+        std::vector<std::byte> packed(q_raw.bytes.size() + k_raw.bytes.size() + v_raw.bytes.size());
+        std::memcpy(packed.data(), q_raw.bytes.data(), q_raw.bytes.size());
+        std::memcpy(packed.data() + q_raw.bytes.size(), k_raw.bytes.data(), k_raw.bytes.size());
+        std::memcpy(packed.data() + q_raw.bytes.size() + k_raw.bytes.size(), v_raw.bytes.data(), v_raw.bytes.size());
+        const int64_t rows = config.attention_heads * config.head_dim + 2 * config.kv_heads * config.head_dim;
+        out.self_attention.qkv_weight = store.make_tensor(
+            core::TensorShape::from_dims({rows, config.hidden_size}),
+            qkv_type,
+            packed.data(),
+            packed.size());
+    } else {
     out.self_attention.q_weight = store.load_tensor(
         source,
         prefix + ".self_attn.q_proj.weight",
@@ -73,6 +104,7 @@ modules::QwenDecoderLayerWeights load_qwen_layer(
         prefix + ".self_attn.v_proj.weight",
         storage_type,
         {config.kv_heads * config.head_dim, config.hidden_size});
+    }
     out.self_attention.out_weight = store.load_tensor(
         source,
         prefix + ".self_attn.o_proj.weight",
@@ -85,6 +117,27 @@ modules::QwenDecoderLayerWeights load_qwen_layer(
         source,
         prefix + ".post_attention_layernorm",
         config.hidden_size);
+    // Packed gate/up (default; MM3_SPLIT_MLP reverts): one GEMM instead of two, and it
+    // unlocks ggml's fused swiglu kernel (silu+mul in one op) - eligible because the
+    // bf16 activation casts are off. 36 layers x 3 fewer launches on every AR frame.
+    if (std::getenv("MM3_PACK_MLP") != nullptr) {
+        const auto g_raw = source.require_tensor_data(prefix + ".mlp.gate_proj.weight");
+        const auto u_raw = source.require_tensor_data(prefix + ".mlp.up_proj.weight");
+        if (g_raw.metadata.dtype != u_raw.metadata.dtype || g_raw.bytes.size() != u_raw.bytes.size()) {
+            throw std::runtime_error("MiniMax Music 3 gate/up fuse requires matching tensors");
+        }
+        const ggml_type mlp_type = assets::ggml_type_for_tensor_dtype(g_raw.metadata.dtype);
+        std::vector<std::byte> packed(g_raw.bytes.size() * 2);
+        std::memcpy(packed.data(), g_raw.bytes.data(), g_raw.bytes.size());
+        std::memcpy(packed.data() + g_raw.bytes.size(), u_raw.bytes.data(), u_raw.bytes.size());
+        modules::LinearWeights gate_up;
+        gate_up.weight = store.make_tensor(
+            core::TensorShape::from_dims({2 * config.intermediate_size, config.hidden_size}),
+            mlp_type,
+            packed.data(),
+            packed.size());
+        out.mlp.gate_up_proj = gate_up;
+    } else {
     out.mlp.gate_proj = binding::linear_from_source(
         store,
         source,
@@ -101,6 +154,7 @@ modules::QwenDecoderLayerWeights load_qwen_layer(
         config.intermediate_size,
         config.hidden_size,
         false);
+    }
     out.mlp.down_proj = binding::linear_from_source(
         store,
         source,
@@ -135,6 +189,17 @@ modules::QwenCausalDecodeRuntimeConfig make_minimax_music3_global_lm_runtime_con
     out.decoder.stack.attention_precision = GGML_PREC_F32;
     out.decoder.stack.projection_precision = GGML_PREC_DEFAULT;
     out.decoder.stack.use_qk_norm = true;
+    // Packed gate/up measured 45.4 -> 50.1 s (a 10% regression): the 24576x4096 packed GEMV
+    // falls off ggml's MMVQ fast path that the two 12288x4096 halves each hit, and the slice
+    // views add copies. Same lesson as the LM QKV fusion - opt-in only.
+    out.decoder.stack.runtime.mlp.mode = std::getenv("MM3_PACK_MLP") != nullptr
+        ? modules::QwenDecoderMLPMode::PackedGateUp
+        : modules::QwenDecoderMLPMode::Exact;
+    // Fused QKV measured neutral/slightly worse for the 8B LM (its GEMMs are already large
+    // enough that packing adds slice overhead without helping occupancy) - opt-in only.
+    out.decoder.stack.qkv_layout = std::getenv("MM3_FUSE_LM_QKV") != nullptr
+        ? modules::QwenDecoderQKVLayout::PackedQKV
+        : modules::QwenDecoderQKVLayout::Separate;
     out.decoder.stack.activation_cast = activation_cast_policy(backend_type);
     out.decoder.stack.runtime.attention.prefill_mode = modules::QwenDecoderAttentionMode::FlashGroupedViewKV;
     out.decoder.stack.runtime.attention.static_mode = modules::QwenDecoderAttentionMode::FlashGroupedViewKV;
@@ -178,14 +243,48 @@ MiniMaxMusic3GlobalLMWeights load_minimax_music3_global_lm_weights(
         out.qwen.stack.layers.push_back(load_qwen_layer(*out.store, source, config, storage_type, layer));
     }
     out.qwen.final_norm = binding::norm_weight_from_source(*out.store, source, "model.norm", config.hidden_size);
-    out.qwen.lm_head = binding::linear_from_source(
-        *out.store,
-        source,
-        "lm_head",
-        storage_type,
-        config.vocab_size,
-        config.hidden_size,
-        false);
+    // Compact head (default on; MM3_FULL_HEAD reverts): the AR stage can only ever sample
+    // the 16384 semantic-audio rows plus the audio-end row, but the stock graph pays for all
+    // 200000 - measured 11.7 ms/frame (a full q4_0 dequantization + FP16 GEMM per frame,
+    // because the BF16 lm_head input disqualifies the MMVQ path). Slice the head to the
+    // reachable rows at load time; the row order matches the compact-logits convention the
+    // sampler already auto-detects, so downstream code is unchanged.
+    if (std::getenv("MM3_FULL_HEAD") == nullptr) {
+        constexpr int64_t kAudioCodeOffset = 151675;   // checkpoint contract (see prompt.h)
+        constexpr int64_t kSemanticVocab = 16384;
+        constexpr int64_t kAudioEndTokenId = 151670;
+        const auto raw = source.require_tensor_data("lm_head.weight");
+        const ggml_type head_type = assets::ggml_type_for_tensor_dtype(raw.metadata.dtype);
+        const size_t row_bytes = ggml_row_size(head_type, config.hidden_size);
+        if (raw.bytes.size() != row_bytes * static_cast<size_t>(config.vocab_size)) {
+            throw std::runtime_error("MiniMax Music 3 lm_head raw size mismatch for compact head");
+        }
+        const int64_t compact_rows = kSemanticVocab + 1;
+        std::vector<std::byte> compact(static_cast<size_t>(compact_rows) * row_bytes);
+        std::memcpy(
+            compact.data(),
+            raw.bytes.data() + static_cast<size_t>(kAudioCodeOffset) * row_bytes,
+            static_cast<size_t>(kSemanticVocab) * row_bytes);
+        std::memcpy(
+            compact.data() + static_cast<size_t>(kSemanticVocab) * row_bytes,
+            raw.bytes.data() + static_cast<size_t>(kAudioEndTokenId) * row_bytes,
+            row_bytes);
+        out.qwen.lm_head = modules::LinearWeights{};
+        out.qwen.lm_head->weight = out.store->make_tensor(
+            core::TensorShape::from_dims({compact_rows, config.hidden_size}),
+            head_type,
+            compact.data(),
+            compact.size());
+    } else {
+        out.qwen.lm_head = binding::linear_from_source(
+            *out.store,
+            source,
+            "lm_head",
+            storage_type,
+            config.vocab_size,
+            config.hidden_size,
+            false);
+    }
     out.store->upload();
     assets.language_model_weights->release_storage();
     return out;

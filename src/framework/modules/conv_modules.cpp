@@ -768,16 +768,24 @@ core::TensorValue ConvTranspose1dModule::build(
             batch_index,
             config_.in_channels,
             input.shape.dims[2]);
+        // ggml_conv_transpose_1d asserts p0 == 0; a padded transposed conv equals the
+        // unpadded one cropped by `padding` samples on each side.
+        const int64_t unpadded_frames = output_shape.dims[2] + 2 * config_.padding;
         auto batch_output = core::wrap_tensor(
             ggml_conv_transpose_1d(
                 ctx.ggml,
                 weight_contiguous.tensor,
                 matrix_input.tensor,
                 config_.stride,
-                config_.padding,
+                0,
                 config_.dilation),
-            core::TensorShape::from_dims({1, config_.out_channels, output_shape.dims[2]}),
+            core::TensorShape::from_dims({1, config_.out_channels, unpadded_frames}),
             GGML_TYPE_F32);
+        if (config_.padding > 0) {
+            batch_output = SliceModule({2, config_.padding, output_shape.dims[2]}).build(ctx, batch_output);
+            batch_output = core::wrap_tensor(
+                ggml_cont(ctx.ggml, batch_output.tensor), batch_output.shape, GGML_TYPE_F32);
+        }
         if (!output.valid()) {
             output = batch_output;
         } else {

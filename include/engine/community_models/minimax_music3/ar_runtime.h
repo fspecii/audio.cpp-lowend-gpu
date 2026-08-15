@@ -8,6 +8,7 @@
 #include "engine/framework/sampling/torch_random.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -23,10 +24,15 @@ public:
         assets::TensorStorageType storage_type);
     ~MiniMaxMusic3ArRuntime();
 
+    // on_frame (optional): called after each emitted frame with the number of complete
+    // frames so far and a pointer to that frame's hidden block (condition_layers x hidden).
+    using FrameCallback = std::function<void(int64_t frames_done, const float * frame_data, int64_t frame_values)>;
+
     std::vector<float> generate_frame_hiddens(
         const MiniMaxMusic3Request & request,
         int64_t target_frames,
-        uint64_t & rng_offset_blocks);
+        uint64_t & rng_offset_blocks,
+        const FrameCallback & on_frame = {});
 
     void release_runtime_graphs();
 

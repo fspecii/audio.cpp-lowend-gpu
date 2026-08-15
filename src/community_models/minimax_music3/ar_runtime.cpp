@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <random>
 #include <stdexcept>
@@ -321,7 +322,13 @@ struct MiniMaxMusic3ArRuntime::Impl {
             graph_arena_bytes,
             graph_arena_bytes);
         qwen_config.return_hidden = true;
-        qwen_config.logits_readback_token_ids = semantic_logits_readback_token_ids(MiniMaxMusic3Prompt{});
+        if (std::getenv("MM3_FULL_HEAD") == nullptr) {
+            // Compact lm_head (see global_lm.cpp): logits come out already in the compact
+            // order, so no readback gather is needed.
+            qwen_config.decoder.logits_size = MiniMaxMusic3Prompt{}.semantic_vocab_size + 1;
+        } else {
+            qwen_config.logits_readback_token_ids = semantic_logits_readback_token_ids(MiniMaxMusic3Prompt{});
+        }
         global_runtime = std::make_unique<modules::QwenCausalDecodeRuntime>(
             execution,
             qwen_config,
@@ -351,13 +358,29 @@ struct MiniMaxMusic3ArRuntime::Impl {
     std::vector<float> generate_frame_hiddens(
         const MiniMaxMusic3Request & request,
         int64_t target_frames,
-        uint64_t & rng_offset_blocks) {
+        uint64_t & rng_offset_blocks,
+        const MiniMaxMusic3ArRuntime::FrameCallback & on_frame) {
         const auto ar_start = Clock::now();
         const auto prompt = prompt_from_request(request);
         const int64_t prompt_steps = static_cast<int64_t>(prompt.conditional_ids.size());
         const int64_t required_cache_steps = std::max<int64_t>(1, prompt_steps + target_frames);
         auto prefill = global_runtime->prefill_tokens_batched(batch2_prompt_ids(prompt), 2, prompt_steps);
-        global_runtime->start_decode_embeddings_batched(prefill.state, required_cache_steps);
+        // Grow the decode graph in buckets instead of allocating for the whole song up
+        // front: fixed-shape CUDA graphs attend over every allocated slot each frame
+        // (~13.6 us/slot/frame measured), so a 75 s request costs long-song attention
+        // from frame 0. Rebuild on bucket boundaries; the KV snapshot round-trip is
+        // milliseconds against seconds saved.
+        int64_t cache_bucket_steps = 512;
+        if (const char * env = std::getenv("MM3_CACHE_BUCKET")) {
+            const int64_t parsed = std::atoll(env);
+            if (parsed > 0) {
+                cache_bucket_steps = parsed;
+            }
+        }
+        int64_t cache_bucket = std::min<int64_t>(
+            required_cache_steps, prompt_steps + cache_bucket_steps);
+        global_runtime->start_decode_embeddings_batched(prefill.state, cache_bucket);
+        int64_t cache_steps_used = prompt_steps;
 
         ArStepState state;
         assign_step_outputs(std::move(prefill.logits), prefill.hidden, state);
@@ -367,7 +390,47 @@ struct MiniMaxMusic3ArRuntime::Impl {
             target_frames * assets->config.condition.condition_layers * assets->config.qwen.hidden_size));
         uint64_t sample_call_index = 0;
         std::mt19937 fallback_rng(static_cast<uint32_t>(request.seed));
+        // Per-part accumulators for the AR hot loop (host wall clock; ggml graph
+        // compute is synchronous here so this attributes GPU time correctly).
+        double acc_sample_ms = 0.0, acc_depth_ms = 0.0, acc_feedback_ms = 0.0, acc_lm_ms = 0.0;
+        int64_t timed_frames = 0;
+        // Optional AR guidance truncation (experimental, off unless MM3_AR_CFG_FRAMES is set):
+        // run classifier-free guidance for the first N frames, then continue conditional-only
+        // on the proven non-batched decode path. Halves language-model work per frame after
+        // the switch. Changes sampled tokens - gate on listening tests, not metrics.
+        int64_t ar_cfg_frames = -1;
+        if (const char * env = std::getenv("MM3_AR_CFG_FRAMES")) {
+            ar_cfg_frames = std::atoll(env);
+        }
+        bool cond_only = false;
         for (int64_t frame = 0; frame <= target_frames; ++frame) {
+            if (!cond_only && ar_cfg_frames >= 0 && frame >= ar_cfg_frames) {
+                // Crop the batched KV cache to its conditional row and hand it to the
+                // non-batched decode runtime (exported layout is batch-major, row 0 first).
+                auto batched = global_runtime->export_batched_decode_state();
+                runtime::TransformerKVState single;
+                single.current_end = batched.current_end;
+                single.layers.resize(batched.layers.size());
+                for (size_t layer = 0; layer < batched.layers.size(); ++layer) {
+                    const auto & src = batched.layers[layer];
+                    auto & dst = single.layers[layer];
+                    dst.valid_steps = src.valid_steps;
+                    const size_t row = src.key.size() / static_cast<size_t>(batched.batch_size);
+                    dst.key.assign(src.key.begin(), src.key.begin() + static_cast<std::ptrdiff_t>(row));
+                    dst.value.assign(src.value.begin(), src.value.begin() + static_cast<std::ptrdiff_t>(row));
+                }
+                global_runtime->start_decode_embeddings(single, required_cache_steps);
+                state.uncond.hidden = state.cond.hidden;
+                // Mirror the conditional logits into the unconditional row so the CFG
+                // formula collapses to the conditional distribution.
+                const size_t width = state.logits.size() / 2;
+                std::copy(state.logits.begin(), state.logits.begin() + static_cast<std::ptrdiff_t>(width),
+                          state.logits.begin() + static_cast<std::ptrdiff_t>(width));
+                cond_only = true;
+                engine::debug::timing_log_scalar("minimax_music3.ar.cond_only_switch_frame",
+                                                 static_cast<double>(frame));
+            }
+            const auto t_sample = Clock::now();
             const int32_t token = sample_semantic_token(
                 prompt,
                 state.logits,
@@ -382,6 +445,7 @@ struct MiniMaxMusic3ArRuntime::Impl {
                 semantic_scratch,
                 semantic_weights,
                 fallback_rng);
+            acc_sample_ms += engine::debug::elapsed_ms(t_sample, Clock::now());
             if (token == prompt.audio_end_token_id) {
                 break;
             }
@@ -390,30 +454,82 @@ struct MiniMaxMusic3ArRuntime::Impl {
                 throw std::runtime_error("MiniMax Music 3 sampled token outside semantic audio range");
             }
             const int32_t semantic_code = token - prompt.audio_code_offset;
-            auto depth_codes = depth->generate(
-                state.cond.hidden,
-                state.uncond.hidden,
-                semantic_code,
-                request.ar_guidance_scale,
-                request.top_k,
-                request.seed,
-                sample_call_index,
-                rng_offset_blocks);
+            const auto t_depth = Clock::now();
+            auto depth_codes = cond_only
+                ? depth->generate_cond(
+                      state.cond.hidden,
+                      semantic_code,
+                      request.top_k,
+                      request.seed,
+                      sample_call_index,
+                      rng_offset_blocks)
+                : depth->generate(
+                      state.cond.hidden,
+                      state.uncond.hidden,
+                      semantic_code,
+                      request.ar_guidance_scale,
+                      request.top_k,
+                      request.seed,
+                      sample_call_index,
+                      rng_offset_blocks);
+            acc_depth_ms += engine::debug::elapsed_ms(t_depth, Clock::now());
             if (frame > 0) {
                 frame_hiddens.insert(frame_hiddens.end(), state.cond.hidden.begin(), state.cond.hidden.end());
                 frame_hiddens.insert(frame_hiddens.end(), depth_codes.hidden.begin(), depth_codes.hidden.end());
+                if (on_frame) {
+                    const int64_t frame_values =
+                        static_cast<int64_t>(state.cond.hidden.size() + depth_codes.hidden.size());
+                    on_frame(
+                        static_cast<int64_t>(frame_hiddens.size()) / frame_values,
+                        frame_hiddens.data() + (frame_hiddens.size() - static_cast<size_t>(frame_values)),
+                        frame_values);
+                }
             }
             if (frame == target_frames) {
                 break;
             }
+            const auto t_feedback = Clock::now();
             const auto feedback = depth->feedback_embedding(depth_codes.codes);
-            duplicate_feedback_batch2(feedback, feedback_batch);
-            auto step = global_runtime->decode_embeddings_batched(feedback_batch, 2);
-            assign_step_outputs(std::move(step.logits), step.hidden, state);
+            if (!cond_only) {
+                duplicate_feedback_batch2(feedback, feedback_batch);
+            }
+            acc_feedback_ms += engine::debug::elapsed_ms(t_feedback, Clock::now());
+            const auto t_lm = Clock::now();
+            if (cond_only) {
+                auto step = global_runtime->decode_embedding(feedback);
+                ++cache_steps_used;
+                // Rebuild the batch-2 shaped step state from the single row: conditional
+                // and unconditional views are identical, so guidance is a no-op.
+                const size_t width = step.logits.size();
+                state.logits.resize(2 * width);
+                std::copy(step.logits.begin(), step.logits.end(), state.logits.begin());
+                std::copy(step.logits.begin(), step.logits.end(),
+                          state.logits.begin() + static_cast<std::ptrdiff_t>(width));
+                state.cond.hidden = step.hidden;
+                state.uncond.hidden = step.hidden;
+            } else {
+                if (cache_steps_used + 1 > cache_bucket && cache_bucket < required_cache_steps) {
+                    auto snapshot = global_runtime->export_batched_decode_state();
+                    cache_bucket = std::min<int64_t>(
+                        required_cache_steps, cache_bucket + cache_bucket_steps);
+                    global_runtime->start_decode_embeddings_batched(snapshot, cache_bucket);
+                }
+                auto step = global_runtime->decode_embeddings_batched(feedback_batch, 2);
+                ++cache_steps_used;
+                assign_step_outputs(std::move(step.logits), step.hidden, state);
+            }
+            acc_lm_ms += engine::debug::elapsed_ms(t_lm, Clock::now());
+            ++timed_frames;
         }
         engine::debug::timing_log_scalar(
             "minimax_music3.ar.total_ms",
             engine::debug::elapsed_ms(ar_start, Clock::now()));
+        engine::debug::timing_log_scalar("minimax_music3.ar.sample_ms", acc_sample_ms);
+        engine::debug::timing_log_scalar("minimax_music3.ar.depth_ms", acc_depth_ms);
+        engine::debug::timing_log_scalar("minimax_music3.ar.feedback_ms", acc_feedback_ms);
+        engine::debug::timing_log_scalar("minimax_music3.ar.lm_ms", acc_lm_ms);
+        engine::debug::timing_log_scalar(
+            "minimax_music3.ar.timed_frames", static_cast<double>(timed_frames));
         return frame_hiddens;
     }
 
@@ -459,8 +575,9 @@ MiniMaxMusic3ArRuntime::~MiniMaxMusic3ArRuntime() = default;
 std::vector<float> MiniMaxMusic3ArRuntime::generate_frame_hiddens(
     const MiniMaxMusic3Request & request,
     int64_t target_frames,
-    uint64_t & rng_offset_blocks) {
-    return impl_->generate_frame_hiddens(request, target_frames, rng_offset_blocks);
+    uint64_t & rng_offset_blocks,
+    const FrameCallback & on_frame) {
+    return impl_->generate_frame_hiddens(request, target_frames, rng_offset_blocks, on_frame);
 }
 
 void MiniMaxMusic3ArRuntime::release_runtime_graphs() {

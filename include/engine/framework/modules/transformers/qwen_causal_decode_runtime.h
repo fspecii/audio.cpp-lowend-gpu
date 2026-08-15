@@ -95,6 +95,12 @@ public:
     int64_t decode_cache_steps() const noexcept;
     int64_t decode_current_end() const noexcept;
     int64_t decode_valid_steps() const noexcept;
+    // Snapshot the batched decode KV cache (live steps only). Pair with
+    // start_decode_embeddings_batched(state, larger_cache_steps) to grow the
+    // decode graph mid-generation instead of paying full-length attention from
+    // the first frame.
+    runtime::TransformerBatchedKVState export_batched_decode_state() const;
+
     void release_runtime_graphs();
 
 private:

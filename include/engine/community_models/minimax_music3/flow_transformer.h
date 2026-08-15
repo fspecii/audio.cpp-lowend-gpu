@@ -50,6 +50,12 @@ public:
         const std::vector<float> & condition,
         int64_t latent_frames,
         float timestep);
+    std::vector<float> predict_velocity_cond(
+        const std::vector<float> & latents,
+        const std::vector<float> & condition,
+        int64_t latent_frames,
+        float timestep);
+
     void prepare_chunk_condition(
         const std::vector<float> & condition,
         int64_t latent_frames);

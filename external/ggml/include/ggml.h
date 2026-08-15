@@ -721,6 +721,11 @@ extern "C" {
 
     GGML_API bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b);
 
+    // audio.cpp local patch: mark a graph so the CUDA backend never captures it
+    // into a CUDA graph (always direct evaluation). Used for graphs whose replay
+    // is broken (observed on the MiniMax Music 3 batch-1 flow graph).
+    GGML_API void ggml_graph_set_no_cuda_capture(struct ggml_cgraph * cgraph);
+
     // misc
 
     GGML_API const char * ggml_version(void);

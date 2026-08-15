@@ -53,6 +53,10 @@
 
 #define UNUSED GGML_UNUSED
 
+void ggml_graph_set_no_cuda_capture(struct ggml_cgraph * cgraph) {
+    cgraph->uid = UINT64_MAX;
+}
+
 uint64_t ggml_graph_next_uid(void) {
 #ifdef _MSC_VER
 #if defined(_WIN32)
