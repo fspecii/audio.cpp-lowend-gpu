@@ -29,8 +29,11 @@
   </a>
 </p>
 
-*(GitHub strips `<audio>` and `<video>` tags from READMEs, so the player lives on the
-project page — one click, no download.)*
+https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/docs/ambsd-3060-trap.mp4
+
+![listen](https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/docs/ambsd-3060-trap.mp4)
+
+<video src="https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/docs/ambsd-3060-trap.mp4" controls></video>
 
 **“Thirty Sixty”** — 2:24, generated in **361 s**. A trap track *about* this optimisation work,
 written and rendered end-to-end on one RTX 3060:
