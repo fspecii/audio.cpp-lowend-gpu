@@ -33,7 +33,7 @@ A trap track *about* this optimisation work, written and rendered end-to-end on 
   </a>
 </p>
 
-https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/samples/ambsd-3060-trap.mp4
+https://github.com/fspecii/audio.cpp-lowend-gpu/releases/download/v1.0-samples/ambsd-3060-trap.mp4
 
 > *Ambsd on the build, running on a thirty sixty*
 > *Three times faster and the music still pretty*
@@ -50,7 +50,7 @@ https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/samples/ambsd-3060-trap
   </a>
 </p>
 
-https://github.com/fspecii/audio.cpp-lowend-gpu/raw/main/samples/trap-demo.mp4
+https://github.com/fspecii/audio.cpp-lowend-gpu/releases/download/v1.0-samples/trap-demo.mp4
 
 <p align="center">
   <a href="https://fspecii.github.io/audio.cpp-lowend-gpu/">
