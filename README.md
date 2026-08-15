@@ -23,17 +23,26 @@
 
 ## 🎧 Listen — made on the 3060 with this fork
 
-**[▶ `ambsd-3060-trap.mp3`](samples/ambsd-3060-trap.mp3)** — 2:24, generated in 361 s.
-A trap track *about* this optimisation work, written and rendered end-to-end on one RTX 3060:
+<p align="center">
+  <a href="https://fspecii.github.io/audio.cpp-lowend-gpu/">
+    <img alt="Play the samples" src="https://img.shields.io/badge/▶%20PLAY%20THE%20SAMPLES-in%20your%20browser-22c55e?style=for-the-badge">
+  </a>
+</p>
+
+*(GitHub strips `<audio>` and `<video>` tags from READMEs, so the player lives on the
+project page — one click, no download.)*
+
+**“Thirty Sixty”** — 2:24, generated in **361 s**. A trap track *about* this optimisation work,
+written and rendered end-to-end on one RTX 3060:
 
 > *Ambsd on the build, running on a thirty sixty*
 > *Three times faster and the music still pretty*
 > *Forty three seconds where it used to be a city*
 > *Low end GPU but the output not gritty*
 
-**[▶ `trap-demo.mp3`](samples/trap-demo.mp3)** — 2:00, generated in 293 s. 140 BPM half-time trap.
+**Trap demo** — 2:00, generated in **293 s**. 140 BPM half-time, F minor.
 
-*(GitHub streams these in-page — click to play.)*
+Direct files: [`ambsd-3060-trap.mp3`](docs/ambsd-3060-trap.mp3) · [`trap-demo.mp3`](docs/trap-demo.mp3)
 
 ---
 
