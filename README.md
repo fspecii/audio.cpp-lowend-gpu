@@ -27,13 +27,7 @@
 
 A trap track *about* this optimisation work, written and rendered end-to-end on one RTX 3060.
 
-<p align="center">
-  <a href="https://fspecii.github.io/audio.cpp-lowend-gpu/">
-    <img src="samples/ambsd-3060-trap-waveform.png" alt="Waveform — click to play" width="100%">
-  </a>
-</p>
-
-https://github.com/fspecii/audio.cpp-lowend-gpu/releases/download/v1.0-samples/ambsd-3060-trap.mp4
+https://github.com/user-attachments/assets/5a503872-0509-49b5-87c4-376690fa2856
 
 > *Ambsd on the build, running on a thirty sixty*
 > *Three times faster and the music still pretty*
@@ -44,13 +38,7 @@ https://github.com/fspecii/audio.cpp-lowend-gpu/releases/download/v1.0-samples/a
 
 140 BPM half-time, F minor.
 
-<p align="center">
-  <a href="https://fspecii.github.io/audio.cpp-lowend-gpu/">
-    <img src="samples/trap-demo-waveform.png" alt="Waveform — click to play" width="100%">
-  </a>
-</p>
-
-https://github.com/fspecii/audio.cpp-lowend-gpu/releases/download/v1.0-samples/trap-demo.mp4
+https://github.com/user-attachments/assets/aea9ac2b-de5e-4cda-923b-6153725ac367
 
 <p align="center">
   <a href="https://fspecii.github.io/audio.cpp-lowend-gpu/">
